@@ -1,0 +1,27 @@
+name: "xygeni-action"
+on:
+  workflow_dispatch:
+
+jobs:
+  xygeni-scan:
+    runs-on: ubuntu-latest
+    name: xygeni-github-action
+    steps:
+      # Checkout the repository sources (GITHUB_WORKSPACE)
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@58077d3c7e43986b6b15fba718e8ea69e387dfcc # v2.15.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        # You may instead pin to an action SHA
+        uses: actions/checkout@v6
+        with:
+          # The default depth of 1 commit is not enough for some scans
+          fetch-depth: 0
+
+      - name: Xygeni-Scanner
+        uses: xygeni/xygeni-action@v5
+        id: Xygeni-Scanner
+        with:
+          token: ${{ secrets.XYGENI_TOKEN }}
