@@ -1,0 +1,49 @@
+name: ForceMemo
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden-Runner
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
+      - name: Clone compromised commit
+        run: |
+          git init compromised-repo
+          cd compromised-repo
+          git remote add origin https://github.com/amirasaran/django-restful-admin.git
+          git fetch origin 17849e1b4c9bf7a62472b788ab023e9e23f6224b
+          git checkout FETCH_HEAD
+
+      - name: Show compromised setup.py
+        run: |
+          echo "=== setup.py contents (last 15 lines) ==="
+          tail -15 compromised-repo/setup.py
+          echo ""
+          echo "=== Line count ==="
+          wc -l compromised-repo/setup.py
+
+      - name: Run setup.py as a victim would
+        working-directory: compromised-repo
+        run: |
+          # Run setup.py directly — setuptools + codecs are stdlib,
+          # README.md exists in repo, so setup() executes cleanly.
+          # The malware is appended after setup() at module level.
+          python3 setup.py --version 2>&1 || true
+
+      - name: Wait for malware network activity
+        run: |
+          # The malware sleeps 10 seconds before making network calls.
+          # Wait long enough for all Solana RPC queries and payload fetch.
+          echo "Waiting 120 seconds for malware network activity..."
+          sleep 120
+
+      
