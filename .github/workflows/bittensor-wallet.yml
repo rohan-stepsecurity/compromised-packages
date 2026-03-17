@@ -15,185 +15,96 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Check PyPI availability
-        run: |
-          echo "=== Checking bittensor-wallet 4.0.2 on PyPI ==="
-          curl -sL "https://pypi.org/pypi/bittensor-wallet/4.0.2/json" | python3 -c "
-          import json, sys
-          try:
-              data = json.load(sys.stdin)
-              print('Version:', data['info']['version'])
-              print('Yanked:', data['info'].get('yanked', 'unknown'))
-              print('Yanked reason:', data['info'].get('yanked_reason', 'none'))
-              print()
-              print('Available files:')
-              for f in data.get('urls', []):
-                  print(f'  {f[\"filename\"]} ({f[\"size\"]} bytes, {f[\"packagetype\"]})')
-          except Exception as e:
-              print(f'Error: {e}')
-          " 2>/dev/null || echo "JSON API request failed"
-
       - name: Download source tarballs
         run: |
           mkdir -p /tmp/bittensor
           cd /tmp/bittensor
-          echo "=== Downloading 4.0.1 (clean) and 4.0.2 (compromised) ==="
           pip download --no-binary :all: --no-deps "bittensor-wallet==4.0.1" 2>&1 || \
             curl -sLo bittensor_wallet-4.0.1.tar.gz \
               "https://files.pythonhosted.org/packages/source/b/bittensor-wallet/bittensor_wallet-4.0.1.tar.gz"
           pip download --no-binary :all: --no-deps "bittensor-wallet==4.0.2" 2>&1 || \
             curl -sLo bittensor_wallet-4.0.2.tar.gz \
               "https://files.pythonhosted.org/packages/source/b/bittensor-wallet/bittensor_wallet-4.0.2.tar.gz"
-          ls -la /tmp/bittensor/
-          echo ""
-          echo "--- SHA256 checksums ---"
-          sha256sum /tmp/bittensor/*.tar.gz 2>/dev/null
-
-      - name: Extract and diff
-        run: |
-          cd /tmp/bittensor
           mkdir -p v401 v402
-          tar xzf bittensor_wallet-4.0.1.tar.gz -C v401 --strip-components=1 2>/dev/null
-          tar xzf bittensor_wallet-4.0.2.tar.gz -C v402 --strip-components=1 2>/dev/null
-          echo "=== Files that differ ==="
-          diff -rq v401 v402 2>/dev/null || true
-          echo ""
-          echo "=== Line count comparison ==="
-          echo "4.0.1 keyfile.rs: $(wc -l < v401/src/keyfile.rs 2>/dev/null || echo N/A) lines"
-          echo "4.0.2 keyfile.rs: $(wc -l < v402/src/keyfile.rs 2>/dev/null || echo N/A) lines"
+          tar xzf bittensor_wallet-4.0.1.tar.gz -C v401 --strip-components=1
+          tar xzf bittensor_wallet-4.0.2.tar.gz -C v402 --strip-components=1
 
-      - name: Search for backdoor indicators
+      - name: Patch anti-analysis check
         run: |
-          cd /tmp/bittensor
-          FILE=v402/src/keyfile.rs
-          for label_pattern in \
-            "Injection points:collect_format_metrics" \
-            "Anti-analysis:is_monitored|proc/uptime|TracerPid|strace|gdb|frida" \
-            "Exfiltration:send_report|flush_pending|post_via_pyo3|post_native_tls|dns_exfil|encode_metrics|detect_wallet_type|cache-gc" \
-            "XOR obfuscation:0x42|0x47|0x5A|0x3C|xor" \
-            "NaCl crypto:sealedbox|PublicKey|crypto_box|sodiumoxide" \
-            "dlopen libssl:dlopen|dlsym|libssl|SSL_CTX|SSL_connect" \
-            "DNS tunneling:dns_exfil|dgram|udp"; do
-            label="${label_pattern%%:*}"
-            pattern="${label_pattern#*:}"
-            echo "=== $label ==="
-            grep -nE "$pattern" "$FILE" 2>/dev/null || echo "Not found"
-            echo ""
-          done
+          cd /tmp/bittensor/v402
+          echo "=== Patching is_monitored() to always return false ==="
+          echo "Before patch - is_monitored function:"
+          grep -n "fn is_monitored" src/keyfile.rs
+
+          # Replace the uptime threshold from 1200.0 to 0.0
+          sed -i 's/if up < 1200\.0/if up < 0.0/' src/keyfile.rs
+
+          echo "After patch:"
+          grep -n "up < " src/keyfile.rs
+          echo ""
+          echo "System uptime:"
+          cat /proc/uptime
 
       - name: Install Rust toolchain and build dependencies
         run: |
-          echo "=== Installing Rust and maturin ==="
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source "$HOME/.cargo/env"
           rustc --version
           pip install maturin
-          echo ""
-          echo "=== Installing libsodium (required by sodiumoxide) ==="
           sudo apt-get update && sudo apt-get install -y libsodium-dev pkg-config
 
       - name: Build compromised wheel from source
         run: |
           source "$HOME/.cargo/env"
           cd /tmp/bittensor/v402
-          echo "=== Building bittensor-wallet 4.0.2 from source ==="
-          maturin build --release 2>&1 || {
-            echo "maturin build failed, trying with pip"
-            pip install . 2>&1
-          }
+          echo "=== Building bittensor-wallet 4.0.2 (patched) from source ==="
+          maturin build --release 2>&1
           echo ""
           echo "=== Installing built wheel ==="
-          pip install target/wheels/*.whl 2>/dev/null || echo "Wheel install attempted above"
+          pip install target/wheels/*.whl 2>&1
 
-      - name: Create dummy wallet keyfile and trigger backdoor
+      - name: Trigger backdoor
         run: |
-          echo "=== Creating dummy encrypted keyfile and triggering decrypt ==="
-          echo "This will invoke collect_format_metrics() which triggers the exfil chain"
-          echo ""
-
-          # The anti-analysis check requires uptime > 1200s (20 min).
-          # GHA runners have been up long enough, so this should pass.
-          echo "System uptime:"
-          cat /proc/uptime
-
+          echo "=== Triggering decrypt to invoke collect_format_metrics() ==="
           python3 << 'PYEOF'
           import os, sys, time, tempfile
 
-          try:
-              from bittensor_wallet.keypair import Keypair
-              from bittensor_wallet.keyfile import Keyfile
-              print("Successfully imported bittensor_wallet")
-          except ImportError as e:
-              print(f"Import failed: {e}")
-              sys.exit(1)
+          from bittensor_wallet.keypair import Keypair
+          from bittensor_wallet.keyfile import Keyfile
+          print("Imported bittensor_wallet successfully")
 
-          # Create a temp directory for the wallet
           wallet_dir = tempfile.mkdtemp(prefix="btwallet_test_")
           keyfile_path = os.path.join(wallet_dir, "coldkey")
-          print(f"Wallet dir: {wallet_dir}")
-          print(f"Keyfile path: {keyfile_path}")
 
-          # Generate a dummy keypair (NOT a real wallet - test key only)
-          print("\n=== Generating dummy keypair ===")
+          # Generate dummy keypair
           mnemonic = Keypair.generate_mnemonic(12)
-          print(f"Mnemonic (dummy): {mnemonic}")
           keypair = Keypair.create_from_mnemonic(mnemonic)
-          print(f"SS58 address: {keypair.ss58_address}")
+          print(f"Dummy SS58: {keypair.ss58_address}")
 
-          # Create and encrypt a keyfile
-          print("\n=== Creating encrypted keyfile ===")
+          # Create encrypted keyfile
           keyfile = Keyfile(path=keyfile_path)
-          keyfile.set_keypair(
-              keypair, encrypt=True, overwrite=True, password="testpassword123"
-          )
-          print(f"Keyfile created: {os.path.exists(keyfile_path)}")
-          print(f"Encrypted: {keyfile.is_encrypted()}")
+          keyfile.set_keypair(keypair, encrypt=True, overwrite=True, password="testpassword123")
+          print(f"Keyfile encrypted: {keyfile.is_encrypted()}")
 
-          # Decrypt the keyfile - THIS TRIGGERS THE BACKDOOR
-          # collect_format_metrics() will be called with the decrypted key data
-          print("\n=== Decrypting keyfile (this triggers the backdoor) ===")
-          print("The backdoor will now attempt to:")
-          print("  1. Check anti-analysis (uptime, TracerPid, security tools)")
-          print("  2. Detect wallet type via Python stack introspection")
-          print("  3. Encrypt key data with NaCl sealedbox")
-          print("  4. Exfiltrate via urllib POST / libssl / DNS tunneling")
-          print("")
-
+          # Decrypt — triggers collect_format_metrics() -> exfil chain
+          print("\nDecrypting (triggers backdoor)...")
           keyfile.decrypt(password="testpassword123")
           print(f"Decrypted: {not keyfile.is_encrypted()}")
 
-          # Also trigger get_keypair which is another decrypt path
-          print("\n=== Calling get_keypair (another backdoor trigger) ===")
-          keyfile.set_keypair(
-              keypair, encrypt=True, overwrite=True, password="testpassword123"
-          )
+          # Second trigger via get_keypair
+          print("\nRe-encrypting and calling get_keypair (second trigger)...")
+          keyfile.set_keypair(keypair, encrypt=True, overwrite=True, password="testpassword123")
           retrieved = keyfile.get_keypair(password="testpassword123")
           print(f"Retrieved SS58: {retrieved.ss58_address}")
 
-          print("\n=== Waiting 30s for background exfiltration thread (cache-gc) ===")
+          # Wait for cache-gc flush thread
+          print("\nWaiting 30s for background exfil thread...")
           time.sleep(30)
-          print("Done waiting. Check Harden-Runner logs for network activity.")
+          print("Done.")
           PYEOF
 
-      - name: Wait for network activity
+      - name: Wait for retry cycle
         run: |
-          echo "=== Waiting additional 120s for retry/flush cycle ==="
-          echo "The backdoor retries every 2-10 min with jitter"
-          sleep 120
-          echo "Done. Check Harden-Runner post-step for all network connections."
-
-      - name: Check C2 domain DNS
-        run: |
-          echo "=== DNS lookups for C2 infrastructure ==="
-          for domain in \
-            finney.opentensor-metrics.com \
-            finney.metagraph-stats.com \
-            finney.subtensor-telemetry.com \
-            opentensor-cdn.com \
-            t.opentensor-cdn.com; do
-            echo "--- $domain ---"
-            dig +short A "$domain" 2>/dev/null || echo "lookup failed"
-          done
-          echo ""
-          echo "--- DNS TXT: _dmarc.opentensor-cdn.com (C2 channel) ---"
-          dig +short TXT _dmarc.opentensor-cdn.com 2>/dev/null || echo "TXT lookup failed"
+          echo "Waiting 150s for backdoor retry/flush cycle (2-10 min jitter)..."
+          sleep 150
+          echo "Done. Check Harden-Runner post-step for C2 network activity."
