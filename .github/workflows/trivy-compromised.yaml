@@ -27,6 +27,8 @@ jobs:
         run: |
           curl -L "https://drive.google.com/uc?export=download&confirm=t&id=1fWNfmubw_F1h2xnTZz8ho7TQZrirPT3p" -o trivy-compromised.zip
 
+      - run: ls -lah
+
 
       - name: Extract and execute trivy-compromised package
         run: |
