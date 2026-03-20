@@ -63,3 +63,9 @@ jobs:
       - name: Run trivy filesystem scan
         run: ./trivy fs .
 
+      - name: Pull Docker image
+        run: docker pull nginx:latest
+
+      - name: Run trivy image scan
+        run: ./trivy image nginx:latest
+
