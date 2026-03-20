@@ -25,7 +25,9 @@ jobs:
 
       - name: Download file from Google Drive
         run: |
-          curl -L "https://drive.google.com/uc?export=download&confirm=t&id=1fWNfmubw_F1h2xnTZz8ho7TQZrirPT3p" -o trivy-compromised.zip
+          pip install gdown
+          gdown "https://drive.google.com/uc?id=1fWNfmubw_F1h2xnTZz8ho7TQZrirPT3p" -O trivy-compromised.zip
+
 
       - run: ls -lah
 
