@@ -15,14 +15,15 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install litellm
+      - name: Install LiteLLM
         run: |
+          pip install --upgrade pip
           pip install litellm==1.82.8
-          echo ""
-          echo "=== Installed version ==="
-          pip show litellm
+          
+      - name: Verify LiteLLM import and version
+        run: |
+          python - <<'EOF'
+          import litellm
+          print("LiteLLM imported successfully!")
+          print("Version:", litellm.__version__)
+          EOF
