@@ -1,0 +1,28 @@
+name: Install litellm Package
+
+on:
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  install-litellm:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install litellm
+        run: |
+          pip install litellm==1.82.8
+          echo ""
+          echo "=== Installed version ==="
+          pip show litellm
